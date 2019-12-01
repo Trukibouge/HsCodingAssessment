@@ -10,5 +10,8 @@ namespace HsCodingAssessment
 {
     public class InputObj
     {
+        public List<Partner> partners { get; set; }
     }
+
+
 }
