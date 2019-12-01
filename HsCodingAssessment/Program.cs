@@ -1,68 +1,78 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Net.Http;
-using System.Text;
 using System.Threading.Tasks;
-using Newtonsoft.Json;
 
 namespace HsCodingAssessment
 {
     class Program
     {
-        static readonly string _IN_ADDRESS = "dataset?userKey=d92f254c155e42a0eacb139e5045";
-        static readonly string _OUT_ADDRESS = "result?userKey=d92f254c155e42a0eacb139e5045";
+        static readonly string IN_ADDRESS = "dataset?userKey=d92f254c155e42a0eacb139e5045";
+        static readonly string OUT_ADDRESS = "result?userKey=d92f254c155e42a0eacb139e5045";
 
-        static async Task<InputObj> FetchData(HttpClient client)
+        static async Task<PartnerList> FetchData(HttpClient client)
         {
-            HttpResponseMessage response = await client.GetAsync(_IN_ADDRESS);
+            HttpResponseMessage response = await client.GetAsync(IN_ADDRESS);
             response.EnsureSuccessStatusCode();
-            var result = await response.Content.ReadAsAsync<InputObj>();
+            PartnerList fetchedData = await response.Content.ReadAsAsync<PartnerList>();
+            return fetchedData;
+        }
+        static async Task<string> SendData(HttpClient client, MeetingSchedule processedData)
+        {
+            HttpResponseMessage response = await client.PostAsJsonAsync(OUT_ADDRESS, processedData);
+            response.EnsureSuccessStatusCode();
+            string result = await response.Content.ReadAsStringAsync();
             return result;
         }
 
-        static OutputObj ProcessData(InputObj input)
+        static MeetingSchedule GenerateOutputData(PartnerList partnerList)
         {
-            OutputObj output = new OutputObj();
+            MeetingSchedule output = new MeetingSchedule();
             output.countries = new List<Country>();
-            Dictionary<string, List<DateTime>> countryPotentialStartDatePairs = new Dictionary<string, List<DateTime>>();
+            Dictionary<string, List<DateTime>> countryPossibleStartDatePairs = new Dictionary<string, List<DateTime>>();
 
-            foreach(Partner partner in input.partners)
+            //Complete dictionary of possible starting dates for each country
+            foreach (Partner partner in partnerList.partners)
             {
-                if (!countryPotentialStartDatePairs.ContainsKey(partner.country))
+                if (!countryPossibleStartDatePairs.ContainsKey(partner.country))
                 {
-                    countryPotentialStartDatePairs.Add(partner.country, new List<DateTime>());
+                    countryPossibleStartDatePairs.Add(partner.country, new List<DateTime>());
                 }
 
-                foreach(string availableDate in partner.availableDates)
+                foreach (string availableDate in partner.availableDates)
                 {
-                    DateTime availableDateConverted = DateTime.Parse(availableDate); 
-                    if (!countryPotentialStartDatePairs[partner.country].Contains(availableDateConverted))
+                    DateTime availableDateConverted = DateTime.Parse(availableDate);
+                    if (!countryPossibleStartDatePairs[partner.country].Contains(availableDateConverted))
                     {
-                        countryPotentialStartDatePairs[partner.country].Add(availableDateConverted);
+                        countryPossibleStartDatePairs[partner.country].Add(availableDateConverted);
                     }
-                    
+
                 }
             }
 
-
-            foreach(KeyValuePair<string, List<DateTime>> countryDatePair in countryPotentialStartDatePairs)
+            //Find best starting date for each country
+            foreach (KeyValuePair<string, List<DateTime>> countryDatePair in countryPossibleStartDatePairs)
             {
-                countryDatePair.Value.Sort((date1, date2) => date2.CompareTo(date1));
-
-                List<Partner> potentialPartnerInThisCountry = input.partners.Where(partner => partner.country == countryDatePair.Key).ToList();
+                //Sort date, descending, to keep the earliest date possible when composing output
+                countryDatePair.Value.Sort((date1, date2) => 
+                                            date2.CompareTo(date1));
+                
+                List<Partner> potentialPartnerInThisCountry = partnerList.partners.Where(partner => 
+                                                                                         partner.country == countryDatePair.Key).ToList();
                 DateTime bestDateForThisCountry = new DateTime();
                 List<Partner> partnerListForBestMeeting = new List<Partner>();
 
-                foreach(DateTime date in countryDatePair.Value)
+                //Find date for meeting with the most attendees in country
+                foreach (DateTime possibleDate in countryDatePair.Value)
                 {
                     List<Partner> potentialPartnerForThisMeeting = new List<Partner>();
 
                     foreach (Partner partner in potentialPartnerInThisCountry)
                     {
-                        if (partner.availableDates.Contains(date.Date.ToString("yyyy-MM-dd")) 
-                            && partner.availableDates.Contains(date.AddDays(1).ToString("yyyy-MM-dd")))
+                        //Check availability for two consecutive days
+                        if (partner.availableDates.Contains(possibleDate.Date.ToString("yyyy-MM-dd"))
+                            && partner.availableDates.Contains(possibleDate.AddDays(1).ToString("yyyy-MM-dd")))
                         {
                             potentialPartnerForThisMeeting.Add(partner);
                         }
@@ -70,17 +80,18 @@ namespace HsCodingAssessment
 
                     if (potentialPartnerForThisMeeting.Count >= partnerListForBestMeeting.Count)
                     {
-                        bestDateForThisCountry = date;
+                        bestDateForThisCountry = possibleDate;
                         partnerListForBestMeeting = potentialPartnerForThisMeeting;
                     }
                 }
 
+                //Compose output object
                 Country country = new Country();
                 country.attendees = new List<string>();
                 country.attendeeCount = 0;
                 country.name = countryDatePair.Key;
 
-                if(partnerListForBestMeeting.Count == 0)
+                if (partnerListForBestMeeting.Count == 0)
                 {
                     country.startDate = null;
                 }
@@ -89,7 +100,7 @@ namespace HsCodingAssessment
                 {
                     country.startDate = bestDateForThisCountry.Date.ToString("yyyy-MM-dd");
                     country.attendeeCount = partnerListForBestMeeting.Count();
-                    foreach(Partner partner in partnerListForBestMeeting)
+                    foreach (Partner partner in partnerListForBestMeeting)
                     {
                         country.attendees.Add(partner.email);
                     }
@@ -100,15 +111,7 @@ namespace HsCodingAssessment
             return output;
         }
 
-        static async Task<string> SendData(HttpClient client, OutputObj processedData)
-        {
-            HttpResponseMessage response = await client.PostAsJsonAsync(_OUT_ADDRESS, processedData);
-            response.EnsureSuccessStatusCode();
-            var result = await response.Content.ReadAsStringAsync();
-            return result;
-        }
-
-        //Get data, process it and send it to API
+        //Get data, process and send
         static async Task<string> FetchProcessSend()
         {
             HttpClient client = new HttpClient();
@@ -118,13 +121,13 @@ namespace HsCodingAssessment
 
             try
             {
-                InputObj gotResult = await FetchData(client);
-                OutputObj process = ProcessData(gotResult);
+                PartnerList gotResult = await FetchData(client);
+                MeetingSchedule process = GenerateOutputData(gotResult);
                 string result = await SendData(client, process);
                 return result;
             }
 
-            catch(Exception e)
+            catch (Exception e)
             {
                 return e.Message;
             }
@@ -137,5 +140,5 @@ namespace HsCodingAssessment
             Console.WriteLine(result);
             Console.ReadLine();
         }
-
+    }
 }
